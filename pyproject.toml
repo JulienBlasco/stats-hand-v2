@@ -1,7 +1,20 @@
 [project]
 name = "stats-hand-v2"
 version = "0.1.0"
-description = "Add your description here"
+description = "Traitement de feuilles de match de handball (FDME) en PDF et visualisation web"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "pdfplumber>=0.11.10",
+    "plotly>=7.0.0",
+    "streamlit>=1.62.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
