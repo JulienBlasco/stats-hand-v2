@@ -50,14 +50,28 @@ def minute(s: int) -> str:
     return f"{s // 60}'"
 
 
+def _dt(seconds):
+    """Convertit des secondes en Timestamp epoch, pour un axe Plotly de type date
+    (seul moyen d'obtenir un hoverformat en minutes/secondes plutôt qu'un nombre décimal).
+    Suppose qu'un match ne dépasse jamais 60 minutes (pas de prolongation en championnat)."""
+    return pd.to_datetime(seconds, unit="s")
+
+
 def _style(fig: go.Figure, match: Match, *, height: int, y_title: str,
            x_title: str = "minute", **layout) -> go.Figure:
     fig.update_layout(
         template="plotly_white", height=height, hovermode="x unified",
-        margin=dict(t=28, r=12, l=12, b=10), **layout,
+        margin=dict(t=28, r=12, l=12, b=10), dragmode=False, **layout,
     )
-    fig.update_xaxes(title=x_title, range=[0, match.duration_s / 60], gridcolor=C_GRID)
-    fig.update_yaxes(title=y_title, gridcolor=C_GRID)
+    ticks_min = list(range(0, match.duration_s // 60 + 1, 10))
+    if ticks_min[-1] != match.duration_s // 60:
+        ticks_min.append(match.duration_s // 60)
+    fig.update_xaxes(
+        title=x_title, type="date", hoverformat="%Mm%Ss", fixedrange=True,
+        range=[_dt(0), _dt(match.duration_s)], gridcolor=C_GRID,
+        tickvals=_dt([m * 60 for m in ticks_min]), ticktext=[str(m) for m in ticks_min],
+    )
+    fig.update_yaxes(title=y_title, gridcolor=C_GRID, fixedrange=True)
     return fig
 
 
@@ -65,7 +79,7 @@ def momentum_figure(match: Match, meta, height: int = 300) -> go.Figure:
     """Rythme de marque lissé (moyenne mobile centrée 5 min, façon stats-hand v1)
     + zone colorée = équipe qui domine le rythme."""
     mom = momentum_series(match)
-    x = [p.minute for p in mom]
+    x = _dt([p.minute * 60 for p in mom])
     rec = [p.rate_rec for p in mom]
     vis = [p.rate_vis for p in mom]
     lower = [min(a, b) for a, b in zip(rec, vis)]
@@ -81,7 +95,7 @@ def momentum_figure(match: Match, meta, height: int = 300) -> go.Figure:
         x=x, y=vis, name=meta.vis_name, line=dict(color=C_VIS, width=2),
         fill="tonexty", fillcolor=C_VIS_FILL,
         hovertemplate="%{y:.2f} but/min<extra>" + meta.vis_name + "</extra>"))
-    fig.add_vline(x=30, line=dict(color=C_INK, width=1, dash="dot"))
+    fig.add_vline(x=_dt(30 * 60), line=dict(color=C_INK, width=1, dash="dot"))
     _style(fig, match, height=height, y_title="buts / min (lissé 5 min)",
            legend=dict(orientation="h", y=1.15))
     fig.update_yaxes(rangemode="tozero")
@@ -141,30 +155,31 @@ tab_score, tab_periodes = st.tabs(["📈 Évolution du score", "🔑 Périodes c
 with tab_score:
     pts = score_series(match)
     stats = score_stats(match)
-    df = pd.DataFrame([(p.time_s / 60, p.rec, p.vis, p.diff) for p in pts],
-                      columns=["min", "rec", "vis", "diff"])
+    df = pd.DataFrame([(p.time_s, p.rec, p.vis, p.diff) for p in pts],
+                      columns=["time_s", "rec", "vis", "diff"])
+    df["t"] = _dt(df["time_s"])
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
-        x=df["min"], y=df["rec"], name=meta.rec_name, line=dict(color=C_REC, width=2, shape="hv"),
+        x=df["t"], y=df["rec"], name=meta.rec_name, line=dict(color=C_REC, width=2, shape="hv"),
         hovertemplate="%{y} — " + meta.rec_name + "<extra></extra>"))
     fig.add_trace(go.Scatter(
-        x=df["min"], y=df["vis"], name=meta.vis_name, line=dict(color=C_VIS, width=2, shape="hv"),
+        x=df["t"], y=df["vis"], name=meta.vis_name, line=dict(color=C_VIS, width=2, shape="hv"),
         hovertemplate="%{y} — " + meta.vis_name + "<extra></extra>"))
-    fig.add_vline(x=30, line=dict(color=C_INK, width=1, dash="dot"),
+    fig.add_vline(x=_dt(30 * 60), line=dict(color=C_INK, width=1, dash="dot"),
                   annotation_text="mi-temps", annotation_position="top")
     for e in match.events:
         if e.kind is EventKind.TIMEOUT:
-            fig.add_vline(x=e.time_s / 60, line=dict(color=C_GRID, width=1))
+            fig.add_vline(x=_dt(e.time_s), line=dict(color=C_GRID, width=1))
     _style(fig, match, height=420, y_title="buts", legend=dict(orientation="h", y=1.12))
     st.plotly_chart(fig, width='stretch')
 
     # différentiel de score (diverging : bleu = REC devant, orange = VIS devant)
     fig2 = go.Figure()
-    fig2.add_trace(go.Scatter(x=df["min"], y=df["diff"].clip(lower=0), line=dict(color=C_REC, width=1, shape="hv"),
+    fig2.add_trace(go.Scatter(x=df["t"], y=df["diff"].clip(lower=0), line=dict(color=C_REC, width=1, shape="hv"),
                               fill="tozeroy", fillcolor=C_REC_FILL, name=meta.rec_name,
                               hovertemplate="+%{y}<extra></extra>"))
-    fig2.add_trace(go.Scatter(x=df["min"], y=df["diff"].clip(upper=0), line=dict(color=C_VIS, width=1, shape="hv"),
+    fig2.add_trace(go.Scatter(x=df["t"], y=df["diff"].clip(upper=0), line=dict(color=C_VIS, width=1, shape="hv"),
                               fill="tozeroy", fillcolor=C_VIS_FILL, name=meta.vis_name,
                               hovertemplate="%{y}<extra></extra>"))
     fig2.add_hline(y=0, line=dict(color=C_INK, width=1))
@@ -191,7 +206,7 @@ with tab_periodes:
     fig = momentum_figure(match, meta, height=360)
     for bw, color in ((bw_rec, C_REC), (bw_vis, C_VIS)):
         b = bw.best
-        fig.add_vrect(x0=b.start_s / 60, x1=b.end_s / 60, fillcolor=color, opacity=0.10,
+        fig.add_vrect(x0=_dt(b.start_s), x1=_dt(b.end_s), fillcolor=color, opacity=0.10,
                       line_width=0, annotation_text=f"top {match.team_name(bw.team).split()[0]}",
                       annotation_position="top left")
     st.plotly_chart(fig, width='stretch')
