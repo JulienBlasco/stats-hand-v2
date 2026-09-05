@@ -167,7 +167,7 @@ with tab_score:
         x=df["t"], y=df["vis"], name=meta.vis_name, line=dict(color=C_VIS, width=2, shape="hv"),
         hovertemplate="%{y} — " + meta.vis_name + "<extra></extra>"))
     fig.add_vline(x=_dt(30 * 60), line=dict(color=C_INK, width=1, dash="dot"),
-                  annotation_text="mi-temps", annotation_position="top")
+                  annotation_text="mi-temps", annotation_position="top", annotation_yshift=-28)
     for e in match.events:
         if e.kind is EventKind.TIMEOUT:
             fig.add_vline(x=_dt(e.time_s), line=dict(color=C_GRID, width=1))
@@ -208,7 +208,7 @@ with tab_periodes:
         b = bw.best
         fig.add_vrect(x0=_dt(b.start_s), x1=_dt(b.end_s), fillcolor=color, opacity=0.10,
                       line_width=0, annotation_text=f"top {match.team_name(bw.team).split()[0]}",
-                      annotation_position="top left")
+                      annotation_position="top left", annotation_yshift=-28)
     st.plotly_chart(fig, width='stretch')
 
     st.subheader("Meilleure / pire période de 10 minutes")
