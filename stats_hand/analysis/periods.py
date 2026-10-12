@@ -37,17 +37,24 @@ class MomentumPoint:
         return self.rate_rec - self.rate_vis
 
 
+def smooth(values: list[float], window_min: int = 5) -> list[float]:
+    """Moyenne mobile centrée (minutes t-2 à t+2 pour 5 min), sur les minutes présentes."""
+    n = len(values)
+    hw = window_min // 2
+    out: list[float] = []
+    for t in range(n):
+        lo, hi = max(0, t - hw), min(n, t + hw + 1)
+        out.append(sum(values[lo:hi]) / (hi - lo))
+    return out
+
+
 def momentum_series(match: Match, window_min: int = 5) -> list[MomentumPoint]:
     """Rythme de marque lissé (moyenne mobile centrée), une valeur par minute."""
     rec, vis = goals_per_minute(match)
-    n = len(rec)
-    hw = window_min // 2
-    out: list[MomentumPoint] = []
-    for t in range(n):
-        lo, hi = max(0, t - hw), min(n, t + hw + 1)
-        span = hi - lo
-        out.append(MomentumPoint(t, sum(rec[lo:hi]) / span, sum(vis[lo:hi]) / span))
-    return out
+    return [
+        MomentumPoint(t, r, v)
+        for t, (r, v) in enumerate(zip(smooth(rec, window_min), smooth(vis, window_min)))
+    ]
 
 
 @dataclass(frozen=True)
