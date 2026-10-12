@@ -29,7 +29,7 @@ uv run pytest
 | `stats_hand/parsing/match.py` | assemblage + résolution de l'équipe de chaque évènement |
 | `stats_hand/analysis/score.py` | évolution du score, écarts, égalités, changements de leader |
 | `stats_hand/analysis/periods.py` | momentum lissé (moyenne mobile centrée 5 min, cf. v1), fenêtres 10 min, séries de buts |
-| `stats_hand/analysis/box_score.py` | box score par joueuse reconstruit depuis le déroulé (back-end, pas encore exposé dans l'app) |
+| `stats_hand/analysis/box_score.py` | box score par joueur reconstruit depuis le déroulé (buts, tirs/arrêts si détaillés, sanctions) + cumul multi-feuilles par licence |
 | `stats_hand/app.py` | app Streamlit (onglets : évolution du score, périodes clés) |
 
 ## Notes sur le format FDME
@@ -39,5 +39,8 @@ uv run pytest
   contre les deux effectifs + les officiels.
 - Le déroulé est mis en **2 colonnes** (colonne gauche entière puis colonne droite).
 - Le temps passe en `H:MM:SS` à la 60ᵉ minute (`01:00:00`).
+- Selon le niveau de compétition, le déroulé détaille aussi les **tirs manqués**
+  (`Tir NOM`) et les **arrêts** (`Arrêt NOM`) : la colonne « Tirs » de la feuille vaut
+  alors buts + tirs manqués. Sans ces lignes, tirs et arrêts ne sont pas affichés.
 - Le bloc « Détail score » a parfois ses libellés en texte vertical non extractible :
   on se repère sur la ligne de nombres (dernier couple = score final).

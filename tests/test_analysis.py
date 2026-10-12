@@ -1,4 +1,9 @@
-from stats_hand.analysis.box_score import box_score
+from stats_hand.analysis.box_score import (
+    box_score,
+    has_shot_tracking,
+    player_events,
+    season_totals,
+)
 from stats_hand.analysis.periods import (
     goals_per_minute,
     momentum_series,
@@ -6,7 +11,9 @@ from stats_hand.analysis.periods import (
     scoring_runs,
 )
 from stats_hand.analysis.score import score_series, score_stats
-from stats_hand.models import REC, VIS
+from stats_hand.models import GOAL_KINDS, REC, VIS
+from stats_hand.parsing.match import build_match
+from tests.conftest import PDFS
 
 
 def test_score_series_monotone_and_final(match):
@@ -59,3 +66,31 @@ def test_box_score_totals(match):
     rec_lines, vis_lines = box_score(match)
     assert sum(pl.buts for pl in rec_lines) == match.meta.score_final[0]
     assert sum(pl.buts for pl in vis_lines) == match.meta.score_final[1]
+
+
+def test_player_events_match_box_score(match):
+    for team, lines in zip((REC, VIS), box_score(match)):
+        for pl in lines:
+            evs = player_events(match, team, pl.nom)
+            assert sum(1 for e in evs if e.kind in GOAL_KINDS) == pl.buts
+
+
+def test_box_score_shots(match):
+    for lines in box_score(match):
+        for pl in lines:
+            assert pl.tirs >= pl.buts
+            if pl.reussite is not None:
+                assert 0 <= pl.reussite <= 1
+    if not has_shot_tracking(match):
+        assert all(pl.tirs_manques == 0 and pl.arrets == 0 for lines in box_score(match) for pl in lines)
+
+
+def test_season_totals():
+    matches = [build_match(p) for p in PDFS]
+    lines = season_totals(matches)
+    assert sum(s.buts for s in lines) == sum(sum(m.meta.score_final) for m in matches)
+    assert all(1 <= s.matchs <= len(matches) for s in lines)
+    assert all(s.matchs_suivis <= s.matchs for s in lines)
+    assert [s.buts for s in lines] == sorted((s.buts for s in lines), reverse=True)
+    # un même joueur présent sur plusieurs feuilles est bien agrégé (licence)
+    assert any(s.matchs > 1 for s in lines)
