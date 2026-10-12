@@ -5,13 +5,14 @@ from stats_hand.analysis.box_score import (
     season_totals,
 )
 from stats_hand.analysis.periods import (
+    exclusions,
     goals_per_minute,
     momentum_series,
     rolling_windows,
     scoring_runs,
 )
 from stats_hand.analysis.score import score_series, score_stats
-from stats_hand.models import GOAL_KINDS, REC, VIS
+from stats_hand.models import GOAL_KINDS, REC, VIS, EventKind
 from stats_hand.parsing.match import build_match
 from tests.conftest import PDFS
 
@@ -94,3 +95,14 @@ def test_season_totals():
     assert [s.buts for s in lines] == sorted((s.buts for s in lines), reverse=True)
     # un même joueur présent sur plusieurs feuilles est bien agrégé (licence)
     assert any(s.matchs > 1 for s in lines)
+
+
+def test_exclusions(match):
+    excl = exclusions(match)
+    n_2min = sum(1 for e in match.events if e.kind is EventKind.SUSPENSION_2MIN and e.team in (REC, VIS))
+    n_disq = sum(1 for e in match.events if e.kind is EventKind.DISQUALIFICATION and e.team in (REC, VIS))
+    assert n_2min <= len(excl) <= n_2min + n_disq
+    for x in excl:
+        assert x.team in (REC, VIS)
+        assert 0 < x.end_s - x.start_s <= 120
+        assert x.end_s <= match.duration_s

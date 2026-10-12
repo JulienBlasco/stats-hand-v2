@@ -1,4 +1,5 @@
-"""Analyse des périodes clés : momentum lissé, fenêtres de 10 min, séries de buts.
+"""Analyse des périodes clés : momentum lissé, fenêtres de 10 min, séries de buts,
+infériorités numériques.
 
 La courbe de momentum reprend la formule de stats-hand v1 (R) : nombre de buts
 par minute pour chaque équipe, lissé par une **moyenne mobile centrée sur 5
@@ -10,7 +11,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from stats_hand.models import GOAL_KINDS, REC, VIS, Match
+from stats_hand.models import GOAL_KINDS, REC, VIS, EventKind, Match
 
 
 def goals_per_minute(match: Match) -> tuple[list[int], list[int]]:
@@ -131,4 +132,38 @@ def scoring_runs(match: Match, top: int = 3) -> dict[str, list[Run]]:
             reverse=True,
         )
         out[team] = team_runs[:top]
+    return out
+
+
+EXCLUSION_S = 120
+
+
+@dataclass(frozen=True)
+class Exclusion:
+    team: str  # équipe qui joue en infériorité numérique
+    start_s: int
+    end_s: int  # début + 2 min, borné à la fin du match
+    label: str  # "2 min NOM Prénom"
+
+
+def exclusions(match: Match) -> list[Exclusion]:
+    """Une infériorité de 2 min par exclusion, sans compensation entre équipes.
+
+    Une disqualification fait aussi jouer l'équipe 2 min à un de moins, sauf si
+    elle accompagne une 2 min du même joueur au même instant (déjà comptée).
+    """
+    out: list[Exclusion] = []
+    seen_2min: set[tuple[int, str]] = set()
+    for e in match.events:
+        if e.team not in (REC, VIS):
+            continue
+        who = e.player.full_name if e.player else e.label
+        if e.kind is EventKind.SUSPENSION_2MIN:
+            seen_2min.add((e.time_s, who))
+            label = f"2 min {who}"
+        elif e.kind is EventKind.DISQUALIFICATION and (e.time_s, who) not in seen_2min:
+            label = f"disqualification {who}"
+        else:
+            continue
+        out.append(Exclusion(e.team, e.time_s, min(e.time_s + EXCLUSION_S, match.duration_s), label))
     return out

@@ -27,6 +27,7 @@ from stats_hand.analysis.box_score import (
 )
 from stats_hand.analysis.periods import (
     best_worst_window,
+    exclusions,
     momentum_series,
     scoring_runs,
 )
@@ -259,11 +260,20 @@ with tab_score:
         hovertemplate="%{y} — " + meta.vis_name + "<extra></extra>"))
     fig.add_vline(x=_dt(30 * 60), line=dict(color=C_INK, width=1, dash="dot"),
                   annotation_text="mi-temps", annotation_position="top", annotation_yshift=-28)
-    for e in match.events:
-        if e.kind is EventKind.TIMEOUT:
-            fig.add_vline(x=_dt(e.time_s), line=dict(color=C_GRID, width=1))
+    # une bande par exclusion : les 2 min concomitantes se superposent (zone plus foncée)
+    excl = exclusions(match)
+    for x in excl:
+        fig.add_vrect(x0=_dt(x.start_s), x1=_dt(x.end_s), fillcolor=C_REC if x.team == REC else C_VIS,
+                      opacity=0.12, line_width=0, layer="below")
+    for team, name, fill in ((REC, meta.rec_name, C_REC_FILL), (VIS, meta.vis_name, C_VIS_FILL)):
+        if any(x.team == team for x in excl):
+            fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name=f"2 min {name}",
+                                     marker=dict(symbol="square", size=12, color=fill), hoverinfo="skip"))
     _style(fig, match, height=420, y_title="buts", legend=dict(orientation="h", y=1.12))
     st.plotly_chart(fig, width='stretch')
+    if excl:
+        st.caption("Bandes : exclusions 2 min (l'équipe joue en infériorité numérique), "
+                   "plus foncées quand elles se chevauchent")
 
     # différentiel de score (diverging : bleu = REC devant, orange = VIS devant)
     fig2 = go.Figure()
