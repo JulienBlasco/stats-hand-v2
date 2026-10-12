@@ -63,13 +63,14 @@ class Window:
 
 def rolling_windows(match: Match, window_s: int = 600, step_s: int = 60) -> list[Window]:
     """Fenêtres de 10 min glissant minute par minute (fenêtres pleines uniquement)."""
-    goals = [e for e in match.events if e.kind in GOAL_KINDS]
     end = match.duration_s
+    # un but au buzzer (time_s == fin du match) compte dans la dernière fenêtre
+    goals = [(min(e.time_s, end - 1), e.team) for e in match.events if e.kind in GOAL_KINDS]
     out: list[Window] = []
     for start in range(0, max(1, end - window_s + step_s), step_s):
         stop = start + window_s
-        gr = sum(1 for e in goals if start <= e.time_s < stop and e.team == REC)
-        gv = sum(1 for e in goals if start <= e.time_s < stop and e.team == VIS)
+        gr = sum(1 for t, team in goals if start <= t < stop and team == REC)
+        gv = sum(1 for t, team in goals if start <= t < stop and team == VIS)
         out.append(Window(start, stop, gr, gv))
     return out
 
