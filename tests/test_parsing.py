@@ -9,8 +9,9 @@ def test_metadata(match):
 
 
 def test_rosters_non_empty(match):
-    assert len(match.rec.players) >= 12
-    assert len(match.vis.players) >= 12
+    # en championnat amateur, une feuille peut ne compter que 11 joueurs (voire moins)
+    assert len(match.rec.players) >= 7
+    assert len(match.vis.players) >= 7
     for p in match.rec.players + match.vis.players:
         assert p.nom and p.prenom
         assert p.numero is not None
