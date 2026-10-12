@@ -18,13 +18,20 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from stats_hand.analysis.box_score import (
+    PlayerLine,
+    box_score,
+    has_shot_tracking,
+    player_events,
+    season_totals,
+)
 from stats_hand.analysis.periods import (
     best_worst_window,
     momentum_series,
     scoring_runs,
 )
 from stats_hand.analysis.score import score_series, score_stats
-from stats_hand.models import REC, VIS, EventKind, Match
+from stats_hand.models import GOAL_KINDS, REC, VIS, EventKind, Match
 from stats_hand.parsing.match import build_match
 
 C_REC = "#2a78d6"  # bleu — équipe recevante
@@ -102,6 +109,88 @@ def momentum_figure(match: Match, meta, height: int = 300) -> go.Figure:
     return fig
 
 
+def _pct(x: float | None) -> str:
+    return f"{x:.0%}" if x is not None else "—"
+
+
+def box_table(lines: list[PlayerLine], tracked: bool) -> pd.DataFrame:
+    """Tableau individuel d'une équipe ; tirs/arrêts seulement si le déroulé les détaille."""
+    rows = []
+    for pl in lines:
+        row = {"N°": pl.numero, "Nom": pl.nom, "Buts": pl.buts, "dont 7m": pl.buts_7m}
+        if tracked:
+            row |= {"Tirs": pl.tirs, "Réussite": _pct(pl.reussite), "Arrêts": pl.arrets}
+        row |= {"2 min": pl.suspensions_2min, "Avert.": pl.avertissements,
+                "Disq.": pl.disqualifications}
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def scorers_figure(lines: list[PlayerLine], color: str, fill: str, n_rows: int,
+                   max_buts: int) -> go.Figure | None:
+    """Barres horizontales des buteurs : buts dans le jeu + buts sur 7m empilés.
+
+    `n_rows` fixe la hauteur (nombre de lignes de l'équipe qui a le plus de buteurs)
+    pour que les graphes des deux équipes aient la même hauteur et la même épaisseur
+    de barres ; les lignes manquantes restent vides en bas du graphe. `max_buts` fixe
+    l'échelle de l'axe des buts, commune aux deux équipes.
+    """
+    scorers = sorted((pl for pl in lines if pl.buts), key=lambda pl: (pl.buts, pl.nom))
+    if not scorers:
+        return None
+    y = [f"{pl.nom} ({pl.numero})" if pl.numero is not None else pl.nom for pl in scorers]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        y=y, x=[pl.buts - pl.buts_7m for pl in scorers], orientation="h", name="jeu",
+        marker_color=color, hovertemplate="%{x} dans le jeu<extra></extra>"))
+    fig.add_trace(go.Bar(
+        y=y, x=[pl.buts_7m for pl in scorers], orientation="h", name="7m",
+        marker=dict(color=fill, line=dict(color=color, width=1)),
+        hovertemplate="%{x} sur 7m<extra></extra>"))
+    fig.update_layout(
+        template="plotly_white", barmode="stack", height=60 + 26 * n_rows,
+        margin=dict(t=10, r=12, l=12, b=10), dragmode=False,
+        legend=dict(orientation="h", y=-0.12 if n_rows > 6 else -0.3),
+    )
+    fig.update_xaxes(fixedrange=True, gridcolor=C_GRID, range=[0, max_buts + 0.5],
+                     dtick=1 if max_buts <= 10 else None)
+    fig.update_yaxes(fixedrange=True, range=[len(scorers) - 0.5 - n_rows, len(scorers) - 0.5])
+    return fig
+
+
+def player_figure(match: Match, team: str, events) -> go.Figure:
+    """Score de l'équipe du joueur, avec ses buts (points) et ses sanctions (traits)."""
+    pts = score_series(match)
+    own = [(p.time_s, p.rec if team == REC else p.vis) for p in pts]
+    opp = [(p.time_s, p.vis if team == REC else p.rec) for p in pts]
+    color = C_REC if team == REC else C_VIS
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=_dt([t for t, _ in opp]), y=[v for _, v in opp], name=match.team_name(VIS if team == REC else REC),
+        line=dict(color=C_GRID, width=2, shape="hv"), hovertemplate="%{y}<extra>adversaire</extra>"))
+    fig.add_trace(go.Scatter(
+        x=_dt([t for t, _ in own]), y=[v for _, v in own], name=match.team_name(team),
+        line=dict(color=color, width=2, shape="hv"), hovertemplate="%{y}<extra>équipe</extra>"))
+    goals = [e for e in events if e.kind in GOAL_KINDS]
+    if goals:
+        fig.add_trace(go.Scatter(
+            x=_dt([e.time_s for e in goals]),
+            y=[e.score_rec if team == REC else e.score_vis for e in goals],
+            mode="markers", name="ses buts",
+            marker=dict(color=color, size=10, line=dict(color="white", width=1.5),
+                        symbol=["diamond" if e.kind is EventKind.GOAL_7M else "circle" for e in goals]),
+            text=[e.raw_action for e in goals], hovertemplate="%{text}<extra></extra>"))
+    for e in events:
+        if e.kind in (EventKind.SUSPENSION_2MIN, EventKind.DISQUALIFICATION):
+            fig.add_vrect(x0=_dt(e.time_s), x1=_dt(min(e.time_s + 120, match.duration_s)),
+                          fillcolor=C_INK, opacity=0.08, line_width=0)
+        elif e.kind is EventKind.WARNING:
+            fig.add_vline(x=_dt(e.time_s), line=dict(color=C_INK, width=1, dash="dot"))
+    fig.add_vline(x=_dt(30 * 60), line=dict(color=C_INK, width=1, dash="dot"))
+    _style(fig, match, height=320, y_title="buts", legend=dict(orientation="h", y=1.15))
+    return fig
+
+
 # --------------------------------------------------------------------------- UI
 
 st.title("🤾 Feuilles de match — visualisation")
@@ -149,7 +238,9 @@ st.caption(
     )
 )
 
-tab_score, tab_periodes = st.tabs(["📈 Évolution du score", "🔑 Périodes clés"])
+tab_score, tab_periodes, tab_joueurs = st.tabs(
+    ["📈 Évolution du score", "🔑 Périodes clés", "👤 Stats individuelles"]
+)
 
 # --------------------------------------------------------------------------- onglet 1
 with tab_score:
@@ -239,3 +330,89 @@ with tab_periodes:
         ]
         col.markdown(f"**{name}**")
         col.dataframe(pd.DataFrame(rows), hide_index=True, width='stretch')
+
+# --------------------------------------------------------------------------- onglet 3
+with tab_joueurs:
+    tracked = has_shot_tracking(match)
+    box_rec, box_vis = box_score(match)
+    teams = ((REC, meta.rec_name, box_rec, C_REC, C_REC_FILL),
+             (VIS, meta.vis_name, box_vis, C_VIS, C_VIS_FILL))
+
+    # contrôle FDME : affiché uniquement en cas d'écart
+    ecarts = [
+        f"{name} — {pl.nom} : {pl.buts} but(s) dans le déroulé, {pl.fdme_buts} sur la feuille"
+        for _, name, lines, _, _ in teams for pl in lines if pl.divergence
+    ]
+    if ecarts:
+        st.warning("Écarts entre le déroulé et la colonne « Buts » de la feuille :\n\n"
+                   + "\n".join(f"- {x}" for x in ecarts))
+
+    st.subheader("Ce match")
+    if not tracked:
+        st.caption("Le déroulé de cette feuille ne détaille pas les tirs ni les arrêts : "
+                   "seuls les buts et sanctions sont disponibles.")
+    n_rows = max(sum(1 for pl in lines if pl.buts) for _, _, lines, _, _ in teams)
+    max_buts = max(pl.buts for _, _, lines, _, _ in teams for pl in lines)
+    for col, (_, name, lines, color, fill) in zip(st.columns(2), teams):
+        col.markdown(f"**{name}**")
+        if fig := scorers_figure(lines, color, fill, n_rows, max_buts):
+            col.plotly_chart(fig, width="stretch")
+        col.dataframe(box_table(lines, tracked), hide_index=True, width="stretch")
+
+    st.subheader("Fiche individuelle")
+    choices = {
+        f"{p.label} — {roster.name}": (roster.team, p.full_name)
+        for roster in (match.rec, match.vis) for p in roster.players
+    }
+    team, nom = choices[st.selectbox("Joueur / joueuse", list(choices))]
+    pl = next(x for x in (box_rec if team == REC else box_vis) if x.nom == nom)
+    evs = player_events(match, team, nom)
+    team_goals = meta.score_final[0] if team == REC else meta.score_final[1]
+    goal_times = [e.time_s for e in evs if e.kind in GOAL_KINDS]
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Buts", pl.buts, f"dont {pl.buts_7m} sur 7m" if pl.buts_7m else None, delta_color="off")
+    m2.metric("Part des buts de l'équipe", _pct(pl.buts / team_goals if team_goals else None))
+    if tracked:
+        m3.metric("Tirs · réussite", f"{pl.tirs} · {_pct(pl.reussite)}",
+                  f"{pl.arrets} arrêt(s)" if pl.arrets else None, delta_color="off")
+    else:
+        m3.metric("1er / dernier but",
+                  f"{minute(goal_times[0])} / {minute(goal_times[-1])}" if goal_times else "—")
+    m4.metric("Sanctions", f"{pl.suspensions_2min} × 2 min",
+              f"{pl.avertissements} avert." + (f", {pl.disqualifications} disq." if pl.disqualifications else ""),
+              delta_color="off")
+
+    st.plotly_chart(player_figure(match, team, evs), width="stretch")
+    st.caption("● but · ◆ but sur 7m · zone grisée : exclusion 2 min · pointillé : avertissement")
+    if evs:
+        st.dataframe(pd.DataFrame([
+            {"temps": e.mmss, "action": e.raw_action, "score": f"{e.score_rec}-{e.score_vis}"}
+            for e in evs
+        ]), hide_index=True, width="stretch")
+    else:
+        st.caption("Aucune action enregistrée à son nom dans le déroulé.")
+
+    st.subheader("Cumul sur les feuilles chargées")
+    if len(matches) < 2:
+        st.caption("Charge plusieurs feuilles de match pour obtenir un cumul par joueur.")
+    else:
+        season = season_totals(list(matches.values()))
+        equipes = sorted({s.equipe for s in season})
+        choix = st.selectbox("Équipe", ["Toutes"] + equipes)
+        any_tracked = any(s.matchs_suivis for s in season)
+        rows = []
+        for s in season:
+            if choix != "Toutes" and s.equipe != choix:
+                continue
+            row = {"Nom": s.nom, "Équipe": s.equipe, "Matchs": s.matchs,
+                   "Buts": s.buts, "dont 7m": s.buts_7m, "Buts/match": round(s.buts_par_match, 1)}
+            if any_tracked:
+                row |= {"Tirs": s.tirs if s.matchs_suivis else None,
+                        "Réussite": _pct(s.reussite), "Arrêts": s.arrets if s.matchs_suivis else None}
+            row |= {"2 min": s.suspensions_2min, "Avert.": s.avertissements, "Disq.": s.disqualifications}
+            rows.append(row)
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch",
+                     column_config={"Buts/match": st.column_config.NumberColumn(format="%.1f")})
+        if any_tracked and not all(has_shot_tracking(m_) for m_ in matches.values()):
+            st.caption("Tirs, réussite et arrêts ne portent que sur les matchs dont le déroulé les détaille.")

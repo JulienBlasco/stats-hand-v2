@@ -30,7 +30,7 @@ uv run pytest
 | `stats_hand/analysis/score.py` | évolution du score, écarts, égalités, changements de leader |
 | `stats_hand/analysis/periods.py` | momentum lissé (moyenne mobile centrée 5 min, cf. v1), fenêtres 10 min, séries de buts |
 | `stats_hand/analysis/box_score.py` | box score par joueur reconstruit depuis le déroulé (buts, tirs/arrêts si détaillés, sanctions) + cumul multi-feuilles par licence |
-| `stats_hand/app.py` | app Streamlit (onglets : évolution du score, périodes clés) |
+| `stats_hand/app.py` | app Streamlit (onglets : évolution du score, périodes clés, stats individuelles) |
 
 ## Notes sur le format FDME
 
