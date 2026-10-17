@@ -30,6 +30,7 @@ from stats_hand.analysis.box_score import (
     has_shot_tracking,
     player_events,
     season_totals,
+    team_saves,
 )
 from stats_hand.analysis.periods import (
     best_worst_window,
@@ -84,17 +85,29 @@ def _dt(seconds):
     return pd.to_datetime(seconds, unit="s")
 
 
-def _style(fig: go.Figure, duration_s: int, *, height: int, y_title: str,
-           x_title: str = "minute", **layout) -> go.Figure:
-    fig.update_layout(
-        template="plotly_white", height=height, hovermode="x unified",
-        margin=dict(t=28, r=12, l=12, b=10), dragmode=False, **layout,
-    )
+def _layout(fig: go.Figure, height: int, **layout) -> None:
+    """Mise en page commune à tous les graphes ; `layout` complète ou remplace les défauts."""
+    fig.update_layout(**{
+        "template": "plotly_white", "height": height, "dragmode": False,
+        "margin": dict(t=28, r=12, l=12, b=10),
+    } | layout)
+
+
+def _halftime_line(fig: go.Figure, **kwargs) -> None:
+    fig.add_vline(x=_dt(30 * 60), line=dict(color=C_INK, width=1, dash="dot"), **kwargs)
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}{'s' if n > 1 else ''}"
+
+
+def _style(fig: go.Figure, duration_s: int, *, height: int, y_title: str, **layout) -> go.Figure:
+    _layout(fig, height, hovermode="x unified", **layout)
     ticks_min = list(range(0, duration_s // 60 + 1, 10))
     if ticks_min[-1] != duration_s // 60:
         ticks_min.append(duration_s // 60)
     fig.update_xaxes(
-        title=x_title, type="date", hoverformat="%Mm%Ss", fixedrange=True,
+        title="minute", type="date", hoverformat="%Mm%Ss", fixedrange=True,
         range=[_dt(0), _dt(duration_s)], gridcolor=C_GRID,
         tickvals=_dt([m * 60 for m in ticks_min]), ticktext=[str(m) for m in ticks_min],
     )
@@ -119,16 +132,16 @@ def rate_figure(duration_s: int, minutes: list[int], rate_a: list[float], rate_b
         x=x, y=rate_b, name=name_b, line=dict(color=C_VIS, width=2),
         fill="tonexty", fillcolor=C_VIS_FILL,
         hovertemplate="%{y:.2f} but/min<extra>" + name_b + "</extra>"))
-    fig.add_vline(x=_dt(30 * 60), line=dict(color=C_INK, width=1, dash="dot"))
+    _halftime_line(fig)
     _style(fig, duration_s, height=height, y_title="buts / min (lissé 5 min)",
            legend=dict(orientation="h", y=1.15))
     fig.update_yaxes(rangemode="tozero")
     return fig
 
 
-def momentum_figure(match: Match, meta, height: int = 300) -> go.Figure:
+def momentum_figure(match: Match, height: int = 300) -> go.Figure:
     """Rythme de marque lissé d'un match (moyenne mobile centrée 5 min, façon stats-hand v1)."""
-    mom = momentum_series(match)
+    mom, meta = momentum_series(match), match.meta
     return rate_figure(match.duration_s, [p.minute for p in mom], [p.rate_rec for p in mom],
                        [p.rate_vis for p in mom], meta.rec_name, meta.vis_name, height)
 
@@ -137,25 +150,36 @@ def _pct(x: float | None) -> str:
     return f"{x:.0%}" if x is not None else "—"
 
 
+def _sanctions(avertissements: int, suspensions_2min: int, disqualifications: int) -> str:
+    """🟨 par avertissement, 2️⃣ par exclusion de 2 min, 🟥 pour une disqualification."""
+    return "🟨" * avertissements + "2️⃣" * suspensions_2min + "🟥" * disqualifications
+
+
 def box_table(lines: list[PlayerLine], tracked: bool) -> pd.DataFrame:
-    """Tableau individuel d'une équipe ; tirs/arrêts seulement si le déroulé les détaille."""
+    """Tableau individuel d'une équipe ; tirs seulement si le déroulé les détaille."""
     rows = []
     for pl in lines:
         row = {"N°": pl.numero, "Nom": pl.nom, "Buts": pl.buts, "dont 7m": pl.buts_7m}
         if tracked:
-            row |= {"Tirs": pl.tirs, "Réussite": _pct(pl.reussite), "Arrêts": pl.arrets}
-        row |= {"2 min": pl.suspensions_2min, "Avert.": pl.avertissements,
-                "Disq.": pl.disqualifications}
+            row |= {"Tirs": pl.tirs, "Réussite": _pct(pl.reussite)}
+        row["Sanctions"] = _sanctions(pl.avertissements, pl.suspensions_2min, pl.disqualifications)
         rows.append(row)
     return pd.DataFrame(rows)
 
 
-def keeper_table(lines: list[PlayerLine]) -> pd.DataFrame | None:
+def keeper_table(lines: list[PlayerLine]) -> pd.DataFrame:
     """Gardiens d'une équipe : joueurs ayant au moins un arrêt."""
     keepers = sorted((pl for pl in lines if pl.arrets > 0), key=lambda pl: (-pl.arrets, pl.nom))
-    if not keepers:
-        return None
     return pd.DataFrame([{"N°": pl.numero, "Nom": pl.nom, "Arrêts": pl.arrets} for pl in keepers])
+
+
+def _save_rate_metric(target, arrets: int, subis: int, suivis: int | None = None) -> None:
+    """Taux d'arrêt d'une équipe ; `target` est `st` ou une colonne."""
+    detail = f"{arrets} arrêts / {subis} tirs cadrés"
+    if suivis:
+        detail += f" sur {_plural(suivis, 'match')}"
+    target.metric("Taux d'arrêt de l'équipe", _pct(arrets / subis if subis else None), detail,
+                  delta_color="off")
 
 
 def scorers_figure(lines: list[PlayerLine] | list[SeasonLine], color: str, fill: str, n_rows: int,
@@ -171,7 +195,7 @@ def scorers_figure(lines: list[PlayerLine] | list[SeasonLine], color: str, fill:
     if not scorers:
         return None
     # les lignes de cumul (SeasonLine) n'ont pas de numéro : il peut changer d'un match à l'autre
-    y = [f"{pl.nom} ({n})" if (n := getattr(pl, "numero", None)) is not None else pl.nom
+    y = [f"{pl.nom} ({pl.numero})" if isinstance(pl, PlayerLine) and pl.numero is not None else pl.nom
          for pl in scorers]
     fig = go.Figure()
     fig.add_trace(go.Bar(
@@ -181,11 +205,8 @@ def scorers_figure(lines: list[PlayerLine] | list[SeasonLine], color: str, fill:
         y=y, x=[pl.buts_7m for pl in scorers], orientation="h", name="7m",
         marker=dict(color=fill, line=dict(color=color, width=1)),
         hovertemplate="%{x} sur 7m<extra></extra>"))
-    fig.update_layout(
-        template="plotly_white", barmode="stack", height=60 + 26 * n_rows,
-        margin=dict(t=10, r=12, l=12, b=10), dragmode=False,
-        legend=dict(orientation="h", y=-0.12 if n_rows > 6 else -0.3),
-    )
+    _layout(fig, 60 + 26 * n_rows, barmode="stack", margin=dict(t=10, r=12, l=12, b=10),
+            legend=dict(orientation="h", y=-0.12 if n_rows > 6 else -0.3))
     fig.update_xaxes(fixedrange=True, gridcolor=C_GRID, range=[0, max_buts + 0.5],
                      dtick=1 if max_buts <= 10 else None)
     fig.update_yaxes(fixedrange=True, range=[len(scorers) - 0.5 - n_rows, len(scorers) - 0.5])
@@ -220,7 +241,7 @@ def player_figure(match: Match, team: str, events) -> go.Figure:
                           fillcolor=C_INK, opacity=0.08, line_width=0)
         elif e.kind is EventKind.WARNING:
             fig.add_vline(x=_dt(e.time_s), line=dict(color=C_INK, width=1, dash="dot"))
-    fig.add_vline(x=_dt(30 * 60), line=dict(color=C_INK, width=1, dash="dot"))
+    _halftime_line(fig)
     _style(fig, match.duration_s, height=320, y_title="buts", legend=dict(orientation="h", y=1.15))
     return fig
 
@@ -268,8 +289,7 @@ def render_match(match: Match) -> None:
         fig.add_trace(go.Scatter(
             x=df["t"], y=df["vis"], name=meta.vis_name, line=dict(color=C_VIS, width=2, shape="hv"),
             hovertemplate="%{y} — " + meta.vis_name + "<extra></extra>"))
-        fig.add_vline(x=_dt(30 * 60), line=dict(color=C_INK, width=1, dash="dot"),
-                      annotation_text="mi-temps", annotation_position="top", annotation_yshift=-28)
+        _halftime_line(fig, annotation_text="mi-temps", annotation_position="top", annotation_yshift=-28)
         # une bande par exclusion : les 2 min concomitantes se superposent (zone plus foncée)
         excl = exclusions(match)
         for x in excl:
@@ -280,7 +300,7 @@ def render_match(match: Match) -> None:
                 fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name=f"2 min {name}",
                                          marker=dict(symbol="square", size=12, color=fill), hoverinfo="skip"))
         _style(fig, match.duration_s, height=420, y_title="buts", legend=dict(orientation="h", y=1.12))
-        st.plotly_chart(fig, width='stretch')
+        st.plotly_chart(fig, width="stretch")
         if excl:
             st.caption("Bandes : exclusions 2 min (l'équipe joue en infériorité numérique), "
                        "plus foncées quand elles se chevauchent")
@@ -296,11 +316,11 @@ def render_match(match: Match) -> None:
         fig2.add_hline(y=0, line=dict(color=C_INK, width=1))
         _style(fig2, match.duration_s, height=220, y_title="écart (buts)", showlegend=False)
         st.caption("Écart de score au fil du match")
-        st.plotly_chart(fig2, width='stretch')
+        st.plotly_chart(fig2, width="stretch")
 
         # périodes clés — momentum
         st.caption("Périodes clés — rythme de marque lissé sur 5 min · la zone colorée marque l'équipe qui domine le rythme")
-        st.plotly_chart(momentum_figure(match, meta, height=280), width='stretch')
+        st.plotly_chart(momentum_figure(match, height=280), width="stretch")
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric(f"Écart max {meta.rec_name}", f"+{stats.max_lead_rec}", minute(stats.max_lead_rec_time))
@@ -314,13 +334,13 @@ def render_match(match: Match) -> None:
     with tab_periodes:
         bw_rec, bw_vis = best_worst_window(match)
 
-        fig = momentum_figure(match, meta, height=360)
+        fig = momentum_figure(match, height=360)
         for bw, color in ((bw_rec, C_REC), (bw_vis, C_VIS)):
             b = bw.best
             fig.add_vrect(x0=_dt(b.start_s), x1=_dt(b.end_s), fillcolor=color, opacity=0.10,
                           line_width=0, annotation_text=f"top {match.team_name(bw.team).split()[0]}",
                           annotation_position="top left", annotation_yshift=-28)
-        st.plotly_chart(fig, width='stretch')
+        st.plotly_chart(fig, width="stretch")
 
         st.subheader("Meilleure / pire période de 10 minutes")
 
@@ -349,7 +369,7 @@ def render_match(match: Match) -> None:
                 for r in runs[team]
             ]
             col.markdown(f"**{name}**")
-            col.dataframe(pd.DataFrame(rows), hide_index=True, width='stretch')
+            col.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
 
     # --------------------------------------------------------------------------- onglet 3
     with tab_joueurs:
@@ -379,17 +399,15 @@ def render_match(match: Match) -> None:
                 col.plotly_chart(fig, width="stretch")
             col.dataframe(box_table(lines, tracked), hide_index=True, width="stretch")
 
-        st.subheader("Gardiens")
-        for col, (side, name, lines, _, _) in zip(st.columns(2), teams):
-            col.markdown(f"**{name}**")
-            if (keepers := keeper_table(lines)) is not None:
-                arrets = sum(pl.arrets for pl in lines)
-                subis = arrets + match.meta.score_final[1 if side == REC else 0]
-                col.metric("Taux d'arrêt de l'équipe", _pct(arrets / subis),
-                           f"{arrets} arrêts / {subis} tirs cadrés", delta_color="off")
-                col.dataframe(keepers, hide_index=True, width="stretch")
-            else:
-                col.caption("Aucun arrêt détaillé.")
+        if tracked:
+            st.subheader("Gardiens")
+            for col, (side, name, lines, _, _) in zip(st.columns(2), teams):
+                col.markdown(f"**{name}**")
+                _save_rate_metric(col, *team_saves(match, side))
+                if (keepers := keeper_table(lines)).empty:
+                    col.caption("Aucun arrêt.")
+                else:
+                    col.dataframe(keepers, hide_index=True, width="stretch")
 
         st.subheader("Fiche individuelle")
         choices = {
@@ -399,15 +417,14 @@ def render_match(match: Match) -> None:
         team, nom = choices[st.selectbox("Joueur / joueuse", list(choices))]
         pl = next(x for x in (box_rec if team == REC else box_vis) if x.nom == nom)
         evs = player_events(match, team, nom)
-        team_goals = meta.score_final[0] if team == REC else meta.score_final[1]
+        team_goals = match.score_for_against(team)[0]
         goal_times = [e.time_s for e in evs if e.kind in GOAL_KINDS]
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Buts", pl.buts, f"dont {pl.buts_7m} sur 7m" if pl.buts_7m else None, delta_color="off")
         m2.metric("Part des buts de l'équipe", _pct(pl.buts / team_goals if team_goals else None))
         if tracked:
-            m3.metric("Tirs · réussite", f"{pl.tirs} · {_pct(pl.reussite)}",
-                      f"{pl.arrets} arrêt(s)" if pl.arrets else None, delta_color="off")
+            m3.metric("Tirs · réussite", f"{pl.tirs} · {_pct(pl.reussite)}")
         else:
             m3.metric("1er / dernier but",
                       f"{minute(goal_times[0])} / {minute(goal_times[-1])}" if goal_times else "—")
@@ -440,24 +457,27 @@ def match_label(m: Match, short: bool = False) -> str:
     return f"{date} {rec} {m.meta.score_final[0]}-{m.meta.score_final[1]} {vis}"
 
 
+def _unique_labels(matches: list[Match], short: bool = False) -> list[str]:
+    """Libellés des matchs ; un doublon (même affiche) est suffixé du code de la feuille."""
+    labels = [match_label(m, short) for m in matches]
+    return [f"{lab} ({m.meta.code})" if labels.count(lab) > 1 else lab for lab, m in zip(labels, matches)]
+
+
 def season_table(season: list[SeasonLine], any_tracked: bool) -> pd.DataFrame:
     rows = []
     for s in season:
         row = {"Nom": s.nom, "Matchs": s.matchs, "Buts": s.buts, "dont 7m": s.buts_7m,
-               "Buts/match": round(s.buts_par_match, 1)}
+               "Buts/match": s.buts_par_match}
         if any_tracked:
-            row |= {"Tirs": s.tirs if s.matchs_suivis else None,
-                    "Réussite": _pct(s.reussite), "Arrêts": s.arrets if s.matchs_suivis else None}
-        row |= {"2 min": s.suspensions_2min, "Avert.": s.avertissements, "Disq.": s.disqualifications}
+            row |= {"Tirs": s.tirs if s.matchs_suivis else None, "Réussite": _pct(s.reussite)}
+        row["Sanctions"] = _sanctions(s.avertissements, s.suspensions_2min, s.disqualifications)
         rows.append(row)
     return pd.DataFrame(rows)
 
 
-def keeper_season_table(season: list[SeasonLine]) -> pd.DataFrame | None:
+def keeper_season_table(season: list[SeasonLine]) -> pd.DataFrame:
     """Gardiens (au moins un arrêt) sur les matchs dont le déroulé détaille les arrêts."""
     keepers = sorted((s for s in season if s.arrets > 0), key=lambda s: (-s.arrets, s.nom))
-    if not keepers:
-        return None
     return pd.DataFrame([
         {"Nom": s.nom, "Matchs suivis": s.matchs_suivis, "Arrêts": s.arrets,
          "Arrêts/match": s.arrets / s.matchs_suivis}
@@ -473,10 +493,10 @@ def render_ensemble(all_matches: list[Match]) -> None:
     rec = team_record(played, team)
     ignored = len(all_matches) - len(played)
     st.caption(
-        f"{rec.matchs} match{'s' if rec.matchs > 1 else ''} · "
+        f"{_plural(rec.matchs, 'match')} · "
         f"{rec.victoires} V – {rec.nuls} N – {rec.defaites} D · "
         f"{rec.buts_pour} buts pour, {rec.buts_contre} contre"
-        + (f" · {ignored} feuille{'s' if ignored > 1 else ''} sans cette équipe ignorée{'s' if ignored > 1 else ''}"
+        + (f" · {_plural(ignored, 'feuille')} sans cette équipe ignorée{'s' if ignored > 1 else ''}"
            if ignored else "")
     )
     duration_s = max(m.duration_s for m in played)
@@ -502,7 +522,7 @@ def render_ensemble(all_matches: list[Match]) -> None:
             for label, w in (("Meilleure", best), ("Pire", worst)):
                 st.markdown(
                     f"**{label}** : de {minute(w.start_s)} à {minute(w.end_s)}, "
-                    f"**{w.pour}-{w.contre}** ({w.diff:+d}) sur {w.matchs} match{'s' if w.matchs > 1 else ''}"
+                    f"**{w.pour}-{w.contre}** ({w.diff:+d}) sur {_plural(w.matchs, 'match')}"
                 )
 
         st.subheader("Bilan par tranche de 10 minutes")
@@ -514,9 +534,7 @@ def render_ensemble(all_matches: list[Match]) -> None:
                              customdata=diffs, hovertemplate="%{y} pour (écart %{customdata})<extra></extra>"))
         fig.add_trace(go.Bar(x=x, y=[s.contre for s in slices], name="adversaires", marker_color=C_VIS,
                              hovertemplate="%{y} contre<extra></extra>"))
-        fig.update_layout(template="plotly_white", barmode="group", height=300, hovermode="x unified",
-                          margin=dict(t=28, r=12, l=12, b=10), dragmode=False,
-                          legend=dict(orientation="h", y=1.15))
+        _layout(fig, 300, barmode="group", hovermode="x unified", legend=dict(orientation="h", y=1.15))
         fig.update_xaxes(title="minutes", fixedrange=True)
         fig.update_yaxes(title=f"buts (cumul sur {len(played)} matchs)", gridcolor=C_GRID, fixedrange=True)
         st.plotly_chart(fig, width="stretch")
@@ -547,7 +565,7 @@ def render_ensemble(all_matches: list[Match]) -> None:
         if shooting := team_shooting(played, team):
             buts, tirs, suivis = shooting
             st.metric("Réussite au tir de l'équipe", _pct(buts / tirs),
-                      f"{buts} buts / {tirs} tirs sur {suivis} match{'s' if suivis > 1 else ''}",
+                      f"{buts} buts / {tirs} tirs sur {_plural(suivis, 'match')}",
                       delta_color="off")
 
         st.subheader("Buteurs")
@@ -560,19 +578,16 @@ def render_ensemble(all_matches: list[Match]) -> None:
         st.dataframe(season_table(season, any_tracked), hide_index=True, width="stretch",
                      column_config={"Buts/match": st.column_config.NumberColumn(format="%.1f")})
         if any_tracked and not all(has_shot_tracking(m) for m in played):
-            st.caption("Tirs, réussite et arrêts ne portent que sur les matchs dont le déroulé les détaille.")
+            st.caption("Tirs et réussite ne portent que sur les matchs dont le déroulé les détaille.")
 
         st.subheader("Gardiens")
         if saves := team_save_rate(played, team):
-            arrets, subis, suivis = saves
-            st.metric("Taux d'arrêt de l'équipe", _pct(arrets / subis),
-                      f"{arrets} arrêts / {subis} tirs cadrés sur {suivis} match{'s' if suivis > 1 else ''}",
-                      delta_color="off")
-        if (keepers := keeper_season_table(season)) is not None:
+            _save_rate_metric(st, *saves)
+        if (keepers := keeper_season_table(season)).empty:
+            st.caption("Aucun arrêt détaillé dans les feuilles de match.")
+        else:
             st.dataframe(keepers, hide_index=True, width="stretch",
                          column_config={"Arrêts/match": st.column_config.NumberColumn(format="%.1f")})
-        else:
-            st.caption("Aucun arrêt détaillé dans les feuilles de match.")
 
 
 # --------------------------------------------------------------------------- UI
@@ -606,15 +621,13 @@ ALL = f"📊 Tous les matchs ({len(parsed)})"
 with st.container(border=True):
     st.markdown("#### Que veux-tu analyser ?")
     if len(parsed) <= 5:
-        # boutons : libellés courts ; un label en double (même affiche) est suffixé du code de la feuille
-        labels = [match_label(m, short=True) for m in parsed]
-        labels = [f"{lab} ({m.meta.code})" if labels.count(lab) > 1 else lab for lab, m in zip(labels, parsed)]
+        # boutons : libellés courts
+        labels = _unique_labels(parsed, short=True)
         choice = st.segmented_control("Vue", [ALL, *labels], default=labels[0],
                                       selection_mode="single", label_visibility="collapsed")
         choice = choice or labels[0]  # un clic sur le bouton actif le désélectionne
     else:
-        labels = [match_label(m) for m in parsed]
-        labels = [f"{lab} ({m.meta.code})" if labels.count(lab) > 1 else lab for lab, m in zip(labels, parsed)]
+        labels = _unique_labels(parsed)
         choice = st.selectbox("Vue", [ALL, *labels], index=1, label_visibility="collapsed")
 
 if choice == ALL:

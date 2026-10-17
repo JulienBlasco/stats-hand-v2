@@ -125,6 +125,11 @@ class Match:
             return self.vis.name
         return "?"
 
+    def score_for_against(self, team: str) -> tuple[int, int]:
+        """Score final (buts pour, buts contre) du côté `team` (REC | VIS)."""
+        rec, vis = self.meta.score_final
+        return (rec, vis) if team == REC else (vis, rec)
+
     @property
     def duration_s(self) -> int:
         base = 60 * 60

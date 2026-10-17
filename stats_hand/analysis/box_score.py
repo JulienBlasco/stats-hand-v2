@@ -37,6 +37,12 @@ class PlayerLine:
         return self.fdme_buts is not None and self.fdme_buts != self.buts
 
 
+def team_saves(match: Match, team: str) -> tuple[int, int]:
+    """(arrêts, tirs cadrés subis) des gardiens du côté `team` : tirs cadrés = arrêts + buts encaissés."""
+    arrets = sum(pl.arrets for pl in box_score(match)[0 if team == REC else 1])
+    return arrets, arrets + match.score_for_against(team)[1]
+
+
 def has_shot_tracking(match: Match) -> bool:
     """Le déroulé détaille-t-il les tirs et arrêts ? (pas le cas de toutes les FDME)"""
     return any(e.kind in (EventKind.SHOT, EventKind.SAVE) for e in match.events)

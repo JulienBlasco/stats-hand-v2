@@ -11,7 +11,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 
-from stats_hand.analysis.box_score import box_score, has_shot_tracking, season_totals
+from stats_hand.analysis.box_score import has_shot_tracking, season_totals, team_saves
 from stats_hand.analysis.periods import (
     Run,
     goals_per_minute,
@@ -188,12 +188,7 @@ def team_save_rate(matches: list[Match], team: str) -> tuple[int, int, int] | No
     """
     arrets = subis = suivis = 0
     for m in team_matches(matches, team):
-        if not has_shot_tracking(m):
-            continue
-        side = side_of(m, team)
-        saves = sum(pl.arrets for pl in box_score(m)[0 if side == REC else 1])
-        contre = _for_against(m, team, *m.meta.score_final)[1]
-        arrets += saves
-        subis += saves + contre
-        suivis += 1
-    return (arrets, subis, suivis) if arrets else None
+        if has_shot_tracking(m):
+            a, n = team_saves(m, side_of(m, team))
+            arrets, subis, suivis = arrets + a, subis + n, suivis + 1
+    return (arrets, subis, suivis) if suivis else None

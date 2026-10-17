@@ -82,6 +82,6 @@ def test_team_shooting(matches):
 
 def test_team_save_rate(matches):
     arrets, subis, suivis = team_save_rate(matches, TEAM)
-    assert 0 < arrets <= subis
+    assert 0 <= arrets <= subis
     assert suivis == 3
     assert team_save_rate(matches, "PARIS 92") is None
