@@ -7,6 +7,7 @@ from stats_hand.analysis.multi import (
     slice_totals,
     team_matches,
     team_record,
+    team_save_rate,
     team_shooting,
     teams_by_count,
     top_runs,
@@ -77,3 +78,10 @@ def test_team_shooting(matches):
     assert suivis == 3
     # pas de suivi des tirs sur les feuilles de LBE
     assert team_shooting(matches, "PARIS 92") is None
+
+
+def test_team_save_rate(matches):
+    arrets, subis, suivis = team_save_rate(matches, TEAM)
+    assert 0 < arrets <= subis
+    assert suivis == 3
+    assert team_save_rate(matches, "PARIS 92") is None

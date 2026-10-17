@@ -97,6 +97,15 @@ def test_season_totals():
     assert any(s.matchs > 1 for s in lines)
 
 
+def test_season_keepers():
+    matches = [build_match(p) for p in PDFS]
+    lines = season_totals(matches)
+    # un gardien (arrêts > 0) a forcément au moins un match suivi : pas de division par zéro
+    assert all(s.matchs_suivis >= 1 for s in lines if s.arrets > 0)
+    total = sum(pl.arrets for m in matches for ls in box_score(m) for pl in ls)
+    assert sum(s.arrets for s in lines) == total
+
+
 def test_exclusions(match):
     excl = exclusions(match)
     n_2min = sum(1 for e in match.events if e.kind is EventKind.SUSPENSION_2MIN and e.team in (REC, VIS))

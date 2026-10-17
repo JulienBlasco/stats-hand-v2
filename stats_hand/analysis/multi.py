@@ -11,7 +11,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 
-from stats_hand.analysis.box_score import season_totals
+from stats_hand.analysis.box_score import box_score, has_shot_tracking, season_totals
 from stats_hand.analysis.periods import (
     Run,
     goals_per_minute,
@@ -179,3 +179,21 @@ def team_shooting(matches: list[Match], team: str) -> tuple[int, int, int] | Non
         return None
     suivis = max(s.matchs_suivis for s in lines)
     return sum(s.buts_suivis for s in lines), tirs, suivis
+
+
+def team_save_rate(matches: list[Match], team: str) -> tuple[int, int, int] | None:
+    """(arrêts, tirs cadrés subis, matchs suivis) des gardiens de l'équipe.
+
+    Tirs cadrés subis = arrêts + buts encaissés, sur les matchs dont le déroulé détaille les tirs.
+    """
+    arrets = subis = suivis = 0
+    for m in team_matches(matches, team):
+        if not has_shot_tracking(m):
+            continue
+        side = side_of(m, team)
+        saves = sum(pl.arrets for pl in box_score(m)[0 if side == REC else 1])
+        contre = _for_against(m, team, *m.meta.score_final)[1]
+        arrets += saves
+        subis += saves + contre
+        suivis += 1
+    return (arrets, subis, suivis) if arrets else None

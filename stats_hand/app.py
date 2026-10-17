@@ -45,6 +45,7 @@ from stats_hand.analysis.multi import (
     slice_totals,
     team_matches,
     team_record,
+    team_save_rate,
     team_shooting,
     teams_by_count,
     top_runs,
@@ -147,6 +148,14 @@ def box_table(lines: list[PlayerLine], tracked: bool) -> pd.DataFrame:
                 "Disq.": pl.disqualifications}
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+def keeper_table(lines: list[PlayerLine]) -> pd.DataFrame | None:
+    """Gardiens d'une équipe : joueurs ayant au moins un arrêt."""
+    keepers = sorted((pl for pl in lines if pl.arrets > 0), key=lambda pl: (-pl.arrets, pl.nom))
+    if not keepers:
+        return None
+    return pd.DataFrame([{"N°": pl.numero, "Nom": pl.nom, "Arrêts": pl.arrets} for pl in keepers])
 
 
 def scorers_figure(lines: list[PlayerLine] | list[SeasonLine], color: str, fill: str, n_rows: int,
@@ -370,6 +379,18 @@ def render_match(match: Match) -> None:
                 col.plotly_chart(fig, width="stretch")
             col.dataframe(box_table(lines, tracked), hide_index=True, width="stretch")
 
+        st.subheader("Gardiens")
+        for col, (side, name, lines, _, _) in zip(st.columns(2), teams):
+            col.markdown(f"**{name}**")
+            if (keepers := keeper_table(lines)) is not None:
+                arrets = sum(pl.arrets for pl in lines)
+                subis = arrets + match.meta.score_final[1 if side == REC else 0]
+                col.metric("Taux d'arrêt de l'équipe", _pct(arrets / subis),
+                           f"{arrets} arrêts / {subis} tirs cadrés", delta_color="off")
+                col.dataframe(keepers, hide_index=True, width="stretch")
+            else:
+                col.caption("Aucun arrêt détaillé.")
+
         st.subheader("Fiche individuelle")
         choices = {
             f"{p.label} — {roster.name}": (roster.team, p.full_name)
@@ -430,6 +451,18 @@ def season_table(season: list[SeasonLine], any_tracked: bool) -> pd.DataFrame:
         row |= {"2 min": s.suspensions_2min, "Avert.": s.avertissements, "Disq.": s.disqualifications}
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+def keeper_season_table(season: list[SeasonLine]) -> pd.DataFrame | None:
+    """Gardiens (au moins un arrêt) sur les matchs dont le déroulé détaille les arrêts."""
+    keepers = sorted((s for s in season if s.arrets > 0), key=lambda s: (-s.arrets, s.nom))
+    if not keepers:
+        return None
+    return pd.DataFrame([
+        {"Nom": s.nom, "Matchs suivis": s.matchs_suivis, "Arrêts": s.arrets,
+         "Arrêts/match": s.arrets / s.matchs_suivis}
+        for s in keepers
+    ])
 
 
 def render_ensemble(all_matches: list[Match]) -> None:
@@ -528,6 +561,18 @@ def render_ensemble(all_matches: list[Match]) -> None:
                      column_config={"Buts/match": st.column_config.NumberColumn(format="%.1f")})
         if any_tracked and not all(has_shot_tracking(m) for m in played):
             st.caption("Tirs, réussite et arrêts ne portent que sur les matchs dont le déroulé les détaille.")
+
+        st.subheader("Gardiens")
+        if saves := team_save_rate(played, team):
+            arrets, subis, suivis = saves
+            st.metric("Taux d'arrêt de l'équipe", _pct(arrets / subis),
+                      f"{arrets} arrêts / {subis} tirs cadrés sur {suivis} match{'s' if suivis > 1 else ''}",
+                      delta_color="off")
+        if (keepers := keeper_season_table(season)) is not None:
+            st.dataframe(keepers, hide_index=True, width="stretch",
+                         column_config={"Arrêts/match": st.column_config.NumberColumn(format="%.1f")})
+        else:
+            st.caption("Aucun arrêt détaillé dans les feuilles de match.")
 
 
 # --------------------------------------------------------------------------- UI
